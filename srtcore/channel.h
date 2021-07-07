@@ -1,22 +1,12 @@
-/*****************************************************************************
+/*
  * SRT - Secure, Reliable, Transport
- * Copyright (c) 2017 Haivision Systems Inc.
- * 
- * This library is free software; you can redistribute it and/or
- * modify it under the terms of the GNU Lesser General Public
- * License as published by the Free Software Foundation; either
- * version 2.1 of the License, or (at your option) any later version.
- * 
- * This library is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * Lesser General Public License for more details.
- * 
- * You should have received a copy of the GNU Lesser General Public
- * License along with this library; If not, see <http://www.gnu.org/licenses/>
- * 
- * Based on UDT4 SDK version 4.11
- *****************************************************************************/
+ * Copyright (c) 2018 Haivision Systems Inc.
+ *
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/.
+ *
+ */
 
 /*****************************************************************************
 Copyright (c) 2001 - 2011, The Board of Trustees of the University of Illinois.
@@ -60,125 +50,118 @@ modified by
    Haivision Systems Inc.
 *****************************************************************************/
 
-#ifndef __UDT_CHANNEL_H__
-#define __UDT_CHANNEL_H__
+#ifndef INC_SRT_CHANNEL_H
+#define INC_SRT_CHANNEL_H
 
-
+#include "platform_sys.h"
 #include "udt.h"
 #include "packet.h"
+#include "socketconfig.h"
+#include "netinet_any.h"
 
+namespace srt
+{
 
 class CChannel
 {
+    void createSocket(int family);
+
 public:
+    // XXX There's currently no way to access the socket ID set for
+    // whatever the channel is currently working for. Required to find
+    // some way to do this, possibly by having a "reverse pointer".
+    // Currently just "unimplemented".
+    std::string CONID() const { return ""; }
 
-   // XXX There's currently no way to access the socket ID set for
-   // whatever the channel is currently working for. Required to find
-   // some way to do this, possibly by having a "reverse pointer".
-   // Currently just "unimplemented".
-   std::string CONID() const { return ""; }
+    CChannel();
+    ~CChannel();
 
-   CChannel();
-   CChannel(int version);
-   ~CChannel();
+    /// Open a UDP channel.
+    /// @param [in] addr The local address that UDP will use.
 
-      /// Open a UDP channel.
-      /// @param addr [in] The local address that UDP will use.
+    void open(const sockaddr_any& addr);
 
-   void open(const sockaddr* addr = NULL);
+    void open(int family);
 
-      /// Open a UDP channel based on an existing UDP socket.
-      /// @param udpsock [in] UDP socket descriptor.
+    /// Open a UDP channel based on an existing UDP socket.
+    /// @param [in] udpsock UDP socket descriptor.
 
-   void open(UDPSOCKET udpsock);
+    void attach(UDPSOCKET udpsock, const sockaddr_any& adr);
 
-      /// Disconnect and close the UDP entity.
+    /// Disconnect and close the UDP entity.
 
-   void close() const;
+    void close() const;
 
-      /// Get the UDP sending buffer size.
-      /// @return Current UDP sending buffer size.
+    /// Get the UDP sending buffer size.
+    /// @return Current UDP sending buffer size.
 
-   int getSndBufSize();
+    int getSndBufSize();
 
-      /// Get the UDP receiving buffer size.
-      /// @return Current UDP receiving buffer size.
+    /// Get the UDP receiving buffer size.
+    /// @return Current UDP receiving buffer size.
 
-   int getRcvBufSize();
+    int getRcvBufSize();
 
-      /// Set the UDP sending buffer size.
-      /// @param size [in] expected UDP sending buffer size.
+    /// Query the socket address that the channel is using.
+    /// @param [out] addr pointer to store the returned socket address.
 
-   void setSndBufSize(int size);
+    void getSockAddr(sockaddr_any& addr) const;
 
-      /// Set the UDP receiving buffer size.
-      /// @param size [in] expected UDP receiving buffer size.
+    /// Query the peer side socket address that the channel is connect to.
+    /// @param [out] addr pointer to store the returned socket address.
 
-   void setRcvBufSize(int size);
+    void getPeerAddr(sockaddr_any& addr) const;
 
-      /// Query the socket address that the channel is using.
-      /// @param addr [out] pointer to store the returned socket address.
+    /// Send a packet to the given address.
+    /// @param [in] addr pointer to the destination address.
+    /// @param [in] packet reference to a CPacket entity.
+    /// @return Actual size of data sent.
 
-   void getSockAddr(sockaddr* addr) const;
+    int sendto(const sockaddr_any& addr, srt::CPacket& packet) const;
 
-      /// Query the peer side socket address that the channel is connect to.
-      /// @param addr [out] pointer to store the returned socket address.
+    /// Receive a packet from the channel and record the source address.
+    /// @param [in] addr pointer to the source address.
+    /// @param [in] packet reference to a CPacket entity.
+    /// @return Actual size of data received.
 
-   void getPeerAddr(sockaddr* addr) const;
+    EReadStatus recvfrom(sockaddr_any& addr, srt::CPacket& packet) const;
 
-      /// Send a packet to the given address.
-      /// @param addr [in] pointer to the destination address.
-      /// @param packet [in] reference to a CPacket entity.
-      /// @return Actual size of data sent.
+    void setConfig(const CSrtMuxerConfig& config);
 
-   int sendto(const sockaddr* addr, CPacket& packet) const;
+    /// Get the IP TTL.
+    /// @param [in] ttl IP Time To Live.
+    /// @return TTL.
 
-      /// Receive a packet from the channel and record the source address.
-      /// @param addr [in] pointer to the source address.
-      /// @param packet [in] reference to a CPacket entity.
-      /// @return Actual size of data received.
+    int getIpTTL() const;
 
-   int recvfrom(sockaddr* addr, CPacket& packet) const;
+    /// Get the IP Type of Service.
+    /// @return ToS.
 
-#ifdef SRT_ENABLE_IPOPTS
-      /// Set the IP TTL.
-      /// @param ttl [in] IP Time To Live.
-      /// @return none.
+    int getIpToS() const;
 
-   void setIpTTL(int ttl);
-
-      /// Set the IP Type of Service.
-      /// @param tos [in] IP Type of Service.
-
-   void setIpToS(int tos);
-
-      /// Get the IP TTL.
-      /// @param ttl [in] IP Time To Live.
-      /// @return TTL.
-
-   int getIpTTL() const;
-
-      /// Get the IP Type of Service.
-      /// @return ToS.
-
-   int getIpToS() const;
+#ifdef SRT_ENABLE_BINDTODEVICE
+    bool getBind(char* dst, size_t len);
 #endif
 
-private:
-   void setUDPSockOpt();
+    int ioctlQuery(int type) const;
+    int sockoptQuery(int level, int option) const;
+
+    const sockaddr*     bindAddress() { return m_BindAddr.get(); }
+    const sockaddr_any& bindAddressAny() { return m_BindAddr; }
 
 private:
-   int m_iIPversion;                    // IP version
-   int m_iSockAddrSize;                 // socket address structure size (pre-defined to avoid run-time test)
+    void setUDPSockOpt();
 
-   UDPSOCKET m_iSocket;                 // socket descriptor
-#ifdef SRT_ENABLE_IPOPTS
-   int m_iIpTTL;
-   int m_iIpToS;
-#endif
-   int m_iSndBufSize;                   // UDP sending buffer size
-   int m_iRcvBufSize;                   // UDP receiving buffer size
+private:
+    UDPSOCKET m_iSocket; // socket descriptor
+
+    // Mutable because when querying original settings
+    // this comprises the cache for extracted values,
+    // although the object itself isn't considered modified.
+    mutable CSrtMuxerConfig m_mcfg; // Note: ReuseAddr is unused and ineffective.
+    sockaddr_any            m_BindAddr;
 };
 
+} // namespace srt
 
 #endif

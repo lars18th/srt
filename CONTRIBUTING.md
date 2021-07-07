@@ -1,6 +1,6 @@
 ## License
 
-By contributing code to the [SRT project](https://github.com/Haivision/srt/), you agree to license your contribution under the [LGPLv2.1 License](COPYING).
+By contributing code to the [SRT project](https://github.com/Haivision/srt/), you agree to license your contribution under the [MPLv2.0 License](LICENSE).
 
 ## Issues
 
@@ -20,6 +20,8 @@ Submit a pull request at any time, whether an issue has been created or not. It 
 * the reusable parts (such as utilities)
 * SRT protocol definitions
 * portability and platform-specific parts
+
+Please follow the [SRT Developer's Guide](docs/dev/developers-guide.md).
 
 ## Code Style
 
