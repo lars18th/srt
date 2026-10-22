@@ -1,0 +1,33 @@
+name: iOS
+
+on:
+  push:
+    branches: [ "master", "dev" ]
+  pull_request:
+    branches: [ "master", "dev" ]
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        sync: [posix, std]
+
+    name: iOS SYNC=${{ matrix.sync }}
+    runs-on: macos-latest
+
+    steps:
+
+    - uses: actions/checkout@v3
+
+    - name: Install dependency packages
+      run: ./scripts/workflows/build/macos-prepare-environment.sh
+
+    - name: configure
+      run: |
+        export PATH="/opt/homebrew/opt/llvm/bin:$PATH" CC=clang CXX=clang++
+        echo "Compiler id:"
+        $CXX -v 
+        ./scripts/workflows/build/configure.sh _build -sync ${{ matrix.sync }} -ut off -enc off -std 11 -bonding on -- -DCMAKE_MAKE_PROGRAM=gmake --toolchain scripts/iOS.cmake
+
+    - name: build
+      run: ./scripts/workflows/build/build.sh _build

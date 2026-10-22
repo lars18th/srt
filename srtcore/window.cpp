@@ -1,22 +1,12 @@
-/*****************************************************************************
+/*
  * SRT - Secure, Reliable, Transport
- * Copyright (c) 2017 Haivision Systems Inc.
+ * Copyright (c) 2018 Haivision Systems Inc.
  * 
- * This library is free software; you can redistribute it and/or
- * modify it under the terms of the GNU Lesser General Public
- * License as published by the Free Software Foundation; either
- * version 2.1 of the License, or (at your option) any later version.
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  * 
- * This library is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * Lesser General Public License for more details.
- * 
- * You should have received a copy of the GNU Lesser General Public
- * License along with this library; If not, see <http://www.gnu.org/licenses/>
- * 
- * Based on UDT4 SDK version 4.11
- *****************************************************************************/
+ */
 
 /*****************************************************************************
 Copyright (c) 2001 - 2011, The Board of Trustees of the University of Illinois.
@@ -60,6 +50,8 @@ modified by
    Haivision Systems Inc.
 *****************************************************************************/
 
+#include "platform_sys.h"
+
 #include <cmath>
 #include <cstring>
 #include "common.h"
@@ -67,7 +59,10 @@ modified by
 #include <algorithm>
 
 using namespace std;
+using namespace srt::sync;
 
+namespace srt
+{
 namespace ACKWindowTools
 {
 
@@ -75,7 +70,7 @@ void store(Seq* r_aSeq, const size_t size, int& r_iHead, int& r_iTail, int32_t s
 {
    r_aSeq[r_iHead].iACKSeqNo = seq;
    r_aSeq[r_iHead].iACK = ack;
-   r_aSeq[r_iHead].TimeStamp = CTimer::getTime();
+   r_aSeq[r_iHead].tsTimeStamp = steady_clock::now();
 
    r_iHead = (r_iHead + 1) % size;
 
@@ -84,27 +79,26 @@ void store(Seq* r_aSeq, const size_t size, int& r_iHead, int& r_iTail, int32_t s
       r_iTail = (r_iTail + 1) % size;
 }
 
-int acknowledge(Seq* r_aSeq, const size_t size, int& r_iHead, int& r_iTail, int32_t seq, int32_t& r_ack)
+int acknowledge(Seq* r_aSeq, const size_t size, int& r_iHead, int& r_iTail, int32_t seq, int32_t& r_ack, const steady_clock::time_point& currtime)
 {
+   // Head has not exceeded the physical boundary of the window
    if (r_iHead >= r_iTail)
    {
-      // Head has not exceeded the physical boundary of the window
-
       for (int i = r_iTail, n = r_iHead; i < n; ++ i)
       {
-         // looking for indentical ACK Seq. No.
+         // Looking for an identical ACK Seq. No.
          if (seq == r_aSeq[i].iACKSeqNo)
          {
-            // return the Data ACK it carried
+            // Return the Data ACK it carried
             r_ack = r_aSeq[i].iACK;
 
-            // calculate RTT
-            int rtt = int(CTimer::getTime() - r_aSeq[i].TimeStamp);
+            // Calculate RTT estimate
+            const int rtt = (int)count_microseconds(currtime - r_aSeq[i].tsTimeStamp);
 
             if (i + 1 == r_iHead)
             {
                r_iTail = r_iHead = 0;
-               r_aSeq[0].iACKSeqNo = -1;
+               r_aSeq[0].iACKSeqNo = SRT_SEQNO_NONE;
             }
             else
                r_iTail = (i + 1) % size;
@@ -113,22 +107,22 @@ int acknowledge(Seq* r_aSeq, const size_t size, int& r_iHead, int& r_iTail, int3
          }
       }
 
-      // Bad input, the ACK node has been overwritten
+      // The record about ACK is not found in the buffer, RTT can not be calculated
       return -1;
    }
 
    // Head has exceeded the physical window boundary, so it is behind tail
-   for (int j = r_iTail, n = r_iHead + size; j < n; ++ j)
+   for (int j = r_iTail, n = r_iHead + (int)size; j < n; ++ j)
    {
-      // looking for indentical ACK seq. no.
+      // Looking for an identical ACK Seq. No.
       if (seq == r_aSeq[j % size].iACKSeqNo)
       {
-         // return Data ACK
+         // Return the Data ACK it carried
          j %= size;
          r_ack = r_aSeq[j].iACK;
 
-         // calculate RTT
-         int rtt = int(CTimer::getTime() - r_aSeq[j].TimeStamp);
+         // Calculate RTT estimate
+         const int rtt = (int)count_microseconds(currtime - r_aSeq[j].tsTimeStamp);
 
          if (j == r_iHead)
          {
@@ -142,14 +136,16 @@ int acknowledge(Seq* r_aSeq, const size_t size, int& r_iHead, int& r_iTail, int3
       }
    }
 
-   // bad input, the ACK node has been overwritten
+   // The record about ACK is not found in the buffer, RTT can not be calculated
    return -1;
 }
-}
+
+} // namespace AckTools
+} // namespace srt
 
 ////////////////////////////////////////////////////////////////////////////////
 
-void CPktTimeWindowTools::initializeWindowArrays(int* r_pktWindow, int* r_probeWindow, int* r_bytesWindow, size_t asize, size_t psize)
+void srt::CPktTimeWindowTools::initializeWindowArrays(int* r_pktWindow, int* r_probeWindow, int* r_bytesWindow, size_t asize, size_t psize, size_t max_payload_size)
 {
    for (size_t i = 0; i < asize; ++ i)
       r_pktWindow[i] = 1000000;   //1 sec -> 1 pkt/sec
@@ -158,93 +154,50 @@ void CPktTimeWindowTools::initializeWindowArrays(int* r_pktWindow, int* r_probeW
       r_probeWindow[k] = 1000;    //1 msec -> 1000 pkts/sec
 
    for (size_t i = 0; i < asize; ++ i)
-      r_bytesWindow[i] = (1500 - SRT_DATA_PKTHDR_SIZE); //based on 1 pkt/sec set in r_pktWindow[i]
+      r_bytesWindow[i] = int(max_payload_size); //based on 1 pkt/sec set in r_pktWindow[i]
 }
 
-
-int CPktTimeWindowTools::getPktRcvSpeed_in(const int* window, int* replica, const int* abytes, size_t asize, int& bytesps)
+int srt::CPktTimeWindowTools::ceilPerMega(double value, double count)
 {
-   // get median value, but cannot change the original value order in the window
-   std::copy(window, window + asize, replica);
-   std::nth_element(replica, replica + (asize / 2), replica + asize);
-   //std::sort(replica, replica + asize);
-   int median = replica[asize / 2];
-
-   unsigned count = 0;
-   int sum = 0;
-   int upper = median << 3;
-   int lower = median >> 3;
-
-   bytesps = 0;
-   unsigned long bytes = 0;
-   const int* bp = abytes;
-   // median filtering
-   const int* p = window;
-   for (int i = 0, n = asize; i < n; ++ i)
-   {
-      if ((*p < upper) && (*p > lower))
-      {
-         ++ count;  //packet counter
-         sum += *p; //usec counter
-////#ifdef SRT_ENABLE_BSTATS
-         bytes += (unsigned long)*bp;   //byte counter
-      }
-      ++ p;     //advance packet pointer
-      ++ bp;    //advance bytes pointer
-   }
-
-   // claculate speed, or return 0 if not enough valid value
-   if (count > (asize >> 1))
-   {
-      bytes += (SRT_DATA_PKTHDR_SIZE * count); //Add protocol headers to bytes received
-      bytesps = (unsigned long)ceil(1000000.0 / (double(sum) / double(bytes)));
-      return (int)ceil(1000000.0 / (sum / count));
-   }
-   else
-   {
-      bytesps = 0;
-      return 0;
-   }
-/* #else
-      }
-      ++ p;
-   }
-
-   // claculate speed, or return 0 if not enough valid value
-   if (count > (ASIZE >> 1))
-      return (int)ceil(1000000.0 / (sum / count));
-   else
-      return 0;
-#endif
-*/
+    static const double MEGA = 1000.0 * 1000.0;
+    return int(::ceil(MEGA / (value / count)));
 }
 
-int CPktTimeWindowTools::getBandwidth_in(const int* window, int* replica, size_t psize)
+int srt::CPktTimeWindowTools::getPktRcvSpeed_in(const int* window, int* replica, const int* abytes, size_t asize, size_t hdr_size, int& w_bytesps)
 {
-   // get median value, but cannot change the original value order in the window
-   std::copy(window, window + psize - 1, replica);
-   std::nth_element(replica, replica + (psize / 2), replica + psize - 1);
-   //std::sort(replica, replica + psize);
-   int median = replica[psize / 2];
+    PassFilter<int> filter = GetPeakRange(window, replica, asize);
 
-   int count = 1;
-   int sum = median;
-   int upper = median << 3; // median*8
-   int lower = median >> 3; // median/8
+    unsigned count = 0;
+    int sum = 0;
 
-   // median filtering
-   const int* p = window;
-   for (int i = 0, n = psize; i < n; ++ i)
-   {
-      if ((*p < upper) && (*p > lower))
-      {
-         ++ count;
-         sum += *p;
-      }
-      ++ p;
-   }
+    w_bytesps = 0;
+    unsigned long bytes = 0;
+    // // (explicit specialization due to problems on MSVC 2013 and 2015)
+    AccumulatePassFilterParallel<unsigned, unsigned long>(window, asize, filter, abytes,
+            (sum), (count), (bytes));
 
-   return (int)ceil(1000000.0 / (double(sum) / double(count)));
+    // calculate speed, or return 0 if not enough valid value
+    if (count <= (asize/2))
+    {
+        w_bytesps = 0;
+        return 0;
+    }
+
+    bytes += (unsigned long)(hdr_size * count); //Add protocol headers to bytes received
+    w_bytesps = ceilPerMega(sum, bytes);
+    return ceilPerMega(sum, count);
+}
+
+int srt::CPktTimeWindowTools::getBandwidth_in(const int* window, int* replica, size_t psize)
+{
+    PassFilter<int> filter = GetPeakRange(window, replica, psize);
+
+    int sum, count;
+    Tie2(sum, count) = AccumulatePassFilter(window, psize, filter);
+    sum   += filter.median;
+    count += 1;
+
+    return ceilPerMega(sum, count);
 }
 
 

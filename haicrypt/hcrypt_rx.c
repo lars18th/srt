@@ -1,19 +1,11 @@
 /*
  * SRT - Secure, Reliable, Transport
- * Copyright (c) 2017 Haivision Systems Inc.
+ * Copyright (c) 2018 Haivision Systems Inc.
  * 
- * This library is free software; you can redistribute it and/or
- * modify it under the terms of the GNU Lesser General Public
- * License as published by the Free Software Foundation; either
- * version 2.1 of the License, or (at your option) any later version.
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  * 
- * This library is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * Lesser General Public License for more details.
- * 
- * You should have received a copy of the GNU Lesser General Public
- * License along with this library; If not, see <http://www.gnu.org/licenses/>
  */
 
 
@@ -47,26 +39,49 @@ int HaiCrypt_Rx_Data(HaiCrypt_Handle hhc,
 	ctx = &crypto->ctx_pair[hcryptMsg_GetKeyIndex(crypto->msg_info, in_pfx)];
 
 	ASSERT(NULL != ctx); /* Header check should prevent this error */
-	ASSERT(NULL != crypto->cipher); /* Header check should prevent this error */
+	ASSERT(NULL != crypto->cryspr); /* Header check should prevent this error */
 
 	crypto->ctx = ctx; /* Context of last received msg */
-	if (NULL == crypto->cipher->decrypt) {
-		HCRYPT_LOG(LOG_ERR, "%s", "cipher had no decryptor\n");
+	if (NULL == crypto->cryspr->ms_decrypt) {
+		HCRYPT_LOG(LOG_ERR, "%s", "cryspr had no decryptor\n");
 	} else if (ctx->status >= HCRYPT_CTX_S_KEYED) {
 		hcrypt_DataDesc indata;
 		indata.pfx      = in_pfx;
 		indata.payload  = data;
 		indata.len      = data_len;
 
-		if (0 > (nb = crypto->cipher->decrypt(crypto->cipher_data, ctx, &indata, 1, NULL, NULL, NULL))) {
-			HCRYPT_LOG(LOG_ERR, "%s", "cipher failed\n");
+		if (0 > (nb = crypto->cryspr->ms_decrypt(crypto->cryspr_cb, ctx, &indata, 1, NULL, NULL, NULL))) {
+			HCRYPT_LOG(LOG_ERR, "%s", "ms_decrypt failed\n");
 		} else {
-			nb = indata.len;
+			nb = (int)indata.len;
 		}
 	} else { /* No key received yet */
 		nb = 0;
 	}
 	return(nb);
+}
+
+int HaiCrypt_GetKeyIndex(HaiCrypt_Handle hhc, unsigned char* in_msg)
+{
+	hcrypt_Session *crypto = (hcrypt_Session *)hhc;
+	int msg_type;
+
+	if ((NULL == crypto)
+	||  (NULL == in_msg)) {
+
+		HCRYPT_LOG(LOG_ERR, "%s", "invalid parameters\n");
+		return(-1);
+	}
+
+	/* Validate HaiCrypt message */
+	if (0 > (msg_type = hcryptMsg_SRT_ParseMsg(crypto->msg_info, in_msg))) {
+		return(-1);
+	}
+
+    if (msg_type != HCRYPT_MSG_PT_KM)
+        return -1;
+
+    return hcryptMsg_GetKeyIndex(crypto->msg_info, in_msg);
 }
 
 int HaiCrypt_Rx_Process(HaiCrypt_Handle hhc, 
@@ -86,7 +101,7 @@ int HaiCrypt_Rx_Process(HaiCrypt_Handle hhc,
 	}
 
 	/* Validate HaiCrypt message */
-	if (0 > (msg_type = crypto->msg_info->parseMsg(in_msg))) {
+	if (0 > (msg_type = hcryptMsg_SRT_ParseMsg(crypto->msg_info, in_msg))) {
 		return(-1);
 	}
 
@@ -100,20 +115,27 @@ int HaiCrypt_Rx_Process(HaiCrypt_Handle hhc,
 			return(-1);
 		}
 		ASSERT(NULL != ctx); /* Header check should prevent this error */
-		ASSERT(NULL != crypto->cipher); /* Header check should prevent this error */
+		ASSERT(NULL != crypto->cryspr); /* Header check should prevent this error */
 
 		crypto->ctx = ctx; /* Context of last received msg */
-		if (NULL == crypto->cipher->decrypt) {
-			HCRYPT_LOG(LOG_ERR, "%s", "cipher had no decryptor\n");
+		if (NULL == crypto->cryspr->ms_decrypt) {
+			HCRYPT_LOG(LOG_ERR, "%s", "cryspr had no decryptor\n");
 			nbout = -1;
 		} else if (ctx->status >= HCRYPT_CTX_S_KEYED) {
+            if ((int)(in_len) <= crypto->msg_info->pfx_len)
+            {
+                // XXX NOTE: SRT doesn't use this type of messages, so it shouldn't
+                // be a danger, but then you can still find something like that on the wire.
+                HCRYPT_LOG(LOG_ERR, "%s%d", "Invalid enc data packet: ", in_len);
+                return -1;
+            }
 			hcrypt_DataDesc indata;
 			indata.pfx      = in_msg;
 			indata.payload  = &in_msg[crypto->msg_info->pfx_len];
 			indata.len      = in_len - crypto->msg_info->pfx_len;
 
-			if (crypto->cipher->decrypt(crypto->cipher_data, ctx, &indata, 1, out_p, out_len_p, &nbout)) {
-				HCRYPT_LOG(LOG_ERR, "%s", "cipher failed\n");
+			if (crypto->cryspr->ms_decrypt(crypto->cryspr_cb, ctx, &indata, 1, out_p, out_len_p, &nbout)) {
+				HCRYPT_LOG(LOG_ERR, "%s", "ms_decrypt failed\n");
 				nbout = -1;
 			}
 		} else { /* No key received yet */
@@ -132,9 +154,6 @@ int HaiCrypt_Rx_Process(HaiCrypt_Handle hhc,
 		||  (0 != memcmp(ctx->KMmsg_cache, in_msg, in_len))) { /* or different */
 
 			nbout = hcryptCtx_Rx_ParseKM(crypto, in_msg, in_len);
-			//-2: unmatched shared secret
-			//-1: other failures
-			//0: success
 		} else {
 			nbout = 0;
 		}

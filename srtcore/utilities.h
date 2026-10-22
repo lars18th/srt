@@ -1,65 +1,291 @@
-/*****************************************************************************
+/*
  * SRT - Secure, Reliable, Transport
- * Copyright (c) 2017 Haivision Systems Inc.
+ * Copyright (c) 2018 Haivision Systems Inc.
  * 
- * This library is free software; you can redistribute it and/or
- * modify it under the terms of the GNU Lesser General Public
- * License as published by the Free Software Foundation; either
- * version 2.1 of the License, or (at your option) any later version.
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  * 
- * This library is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * Lesser General Public License for more details.
- * 
- * You should have received a copy of the GNU Lesser General Public
- * License along with this library; If not, see <http://www.gnu.org/licenses/>
- * 
- *****************************************************************************/
+ */
 
 /*****************************************************************************
 written by
    Haivision Systems Inc.
  *****************************************************************************/
 
-#ifndef INC__SRT_UTILITIES_H
-#define INC__SRT_UTILITIES_H
+#ifndef INC_SRT_UTILITIES_H
+#define INC_SRT_UTILITIES_H
 
+// Windows warning disabler
+#define _CRT_SECURE_NO_WARNINGS 1
 
-#ifndef __UDT_H__
-#error Must include udt.h prior to this header!
-#endif
+#include "platform_sys.h"
+#include "srt_attr_defs.h" // defines HAVE_CXX11
 
-#ifdef __GNUG__
-#define ATR_UNUSED __attribute__((unused))
-#define ATR_DEPRECATED __attribute__((deprecated))
-#else
-#define ATR_UNUSED
-#define ATR_DEPRECATED
-#endif
-
-#if defined(__cplusplus) && __cplusplus > 199711L
-#define HAVE_CXX11 1
-#define ATR_NOEXCEPT noexcept
-#else
-#define ATR_NOEXCEPT // throw() - bad idea
-#endif
+// Happens that these are defined, undefine them in advance
+#undef min
+#undef max
 
 #include <string>
+#include <algorithm>
 #include <bitset>
+#include <map>
+#include <vector>
 #include <functional>
+#include <memory>
+#include <iomanip>
 #include <sstream>
+#include <utility>
+
+#if HAVE_CXX11
+#include <type_traits>
+#endif
+
 #include <cstdlib>
 #include <cerrno>
 #include <cstring>
+#include <stdexcept>
 
 // -------------- UTILITIES ------------------------
 
+// --- ENDIAN ---
+// Copied from: https://gist.github.com/panzi/6856583
+// License: Public Domain.
+
+#if (defined(_WIN16) || defined(_WIN32) || defined(_WIN64)) && !defined(__WINDOWS__)
+
+#	define __WINDOWS__
+
+#endif
+
+#if defined(__linux__) || defined(__CYGWIN__) || defined(__GNU__) || defined(__GLIBC__)
+
+#	include <endian.h>
+
+// GLIBC-2.8 and earlier does not provide these macros.
+// See http://linux.die.net/man/3/endian
+// From https://gist.github.com/panzi/6856583
+#   if defined(__GLIBC__) \
+      && ( !defined(__GLIBC_MINOR__) \
+         || ((__GLIBC__ < 2) \
+         || ((__GLIBC__ == 2) && (__GLIBC_MINOR__ < 9))) )
+#       include <arpa/inet.h>
+#       if defined(__BYTE_ORDER) && (__BYTE_ORDER == __LITTLE_ENDIAN)
+
+#           define htole32(x) (x)
+#           define le32toh(x) (x)
+
+#       elif defined(__BYTE_ORDER) && (__BYTE_ORDER == __BIG_ENDIAN)
+
+#           define htole16(x) ((((((uint16_t)(x)) >> 8))|((((uint16_t)(x)) << 8)))
+#           define le16toh(x) ((((((uint16_t)(x)) >> 8))|((((uint16_t)(x)) << 8)))
+
+#           define htole32(x) (((uint32_t)htole16(((uint16_t)(((uint32_t)(x)) >> 16)))) | (((uint32_t)htole16(((uint16_t)(x)))) << 16))
+#           define le32toh(x) (((uint32_t)le16toh(((uint16_t)(((uint32_t)(x)) >> 16)))) | (((uint32_t)le16toh(((uint16_t)(x)))) << 16))
+
+#       else
+#           error Byte Order not supported or not defined.
+#       endif
+#   endif
+
+#elif defined(__APPLE__)
+
+#	include <libkern/OSByteOrder.h>
+
+#	define htobe16(x) OSSwapHostToBigInt16(x)
+#	define htole16(x) OSSwapHostToLittleInt16(x)
+#	define be16toh(x) OSSwapBigToHostInt16(x)
+#	define le16toh(x) OSSwapLittleToHostInt16(x)
+ 
+#	define htobe32(x) OSSwapHostToBigInt32(x)
+#	define htole32(x) OSSwapHostToLittleInt32(x)
+#	define be32toh(x) OSSwapBigToHostInt32(x)
+#	define le32toh(x) OSSwapLittleToHostInt32(x)
+ 
+#	define htobe64(x) OSSwapHostToBigInt64(x)
+#	define htole64(x) OSSwapHostToLittleInt64(x)
+#	define be64toh(x) OSSwapBigToHostInt64(x)
+#	define le64toh(x) OSSwapLittleToHostInt64(x)
+
+#	define __BYTE_ORDER    BYTE_ORDER
+#	define __BIG_ENDIAN    BIG_ENDIAN
+#	define __LITTLE_ENDIAN LITTLE_ENDIAN
+#	define __PDP_ENDIAN    PDP_ENDIAN
+
+#elif defined(__OpenBSD__)
+
+#	include <sys/endian.h>
+
+#elif defined(__NetBSD__) || defined(__FreeBSD__) || defined(__DragonFly__) || defined(__FreeBSD_kernel__)
+
+#	include <sys/endian.h>
+
+#ifndef be16toh
+#	define be16toh(x) betoh16(x)
+#endif
+#ifndef le16toh
+#	define le16toh(x) letoh16(x)
+#endif
+
+#ifndef be32toh
+#	define be32toh(x) betoh32(x)
+#endif
+#ifndef le32toh
+#	define le32toh(x) letoh32(x)
+#endif
+
+#ifndef be64toh
+#	define be64toh(x) betoh64(x)
+#endif
+#ifndef le64toh
+#	define le64toh(x) letoh64(x)
+#endif
+
+#elif defined(SUNOS)
+
+   // SunOS/Solaris
+
+   #include <sys/byteorder.h>
+   #include <sys/isa_defs.h>
+
+   #define __LITTLE_ENDIAN 1234
+   #define __BIG_ENDIAN 4321
+
+   # if defined(_BIG_ENDIAN)
+   #define __BYTE_ORDER __BIG_ENDIAN
+   #define be64toh(x) (x)
+   #define be32toh(x) (x)
+   #define be16toh(x) (x)
+   #define le16toh(x) ((uint16_t)BSWAP_16(x))
+   #define le32toh(x) BSWAP_32(x)
+   #define le64toh(x) BSWAP_64(x)
+   #define htobe16(x) (x)
+   #define htole16(x) ((uint16_t)BSWAP_16(x))
+   #define htobe32(x) (x)
+   #define htole32(x) BSWAP_32(x)
+   #define htobe64(x) (x)
+   #define htole64(x) BSWAP_64(x)
+   # else
+   #define __BYTE_ORDER __LITTLE_ENDIAN
+   #define be64toh(x) BSWAP_64(x)
+   #define be32toh(x) ntohl(x)
+   #define be16toh(x) ntohs(x)
+   #define le16toh(x) (x)
+   #define le32toh(x) (x)
+   #define le64toh(x) (x)
+   #define htobe16(x) htons(x)
+   #define htole16(x) (x)
+   #define htobe32(x) htonl(x)
+   #define htole32(x) (x)
+   #define htobe64(x) BSWAP_64(x)
+   #define htole64(x) (x)
+   # endif
+
+#elif defined(__WINDOWS__)
+
+#	include <winsock2.h>
+
+#	if BYTE_ORDER == LITTLE_ENDIAN
+
+#		define htobe16(x) htons(x)
+#		define htole16(x) (x)
+#		define be16toh(x) ntohs(x)
+#		define le16toh(x) (x)
+ 
+#		define htobe32(x) htonl(x)
+#		define htole32(x) (x)
+#		define be32toh(x) ntohl(x)
+#		define le32toh(x) (x)
+ 
+#		define htobe64(x) htonll(x)
+#		define htole64(x) (x)
+#		define be64toh(x) ntohll(x)
+#		define le64toh(x) (x)
+
+#	elif BYTE_ORDER == BIG_ENDIAN
+
+		/* that would be xbox 360 */
+#		define htobe16(x) (x)
+#		define htole16(x) __builtin_bswap16(x)
+#		define be16toh(x) (x)
+#		define le16toh(x) __builtin_bswap16(x)
+ 
+#		define htobe32(x) (x)
+#		define htole32(x) __builtin_bswap32(x)
+#		define be32toh(x) (x)
+#		define le32toh(x) __builtin_bswap32(x)
+ 
+#		define htobe64(x) (x)
+#		define htole64(x) __builtin_bswap64(x)
+#		define be64toh(x) (x)
+#		define le64toh(x) __builtin_bswap64(x)
+
+#	else
+
+#		error byte order not supported
+
+#	endif
+
+#	define __BYTE_ORDER    BYTE_ORDER
+#	define __BIG_ENDIAN    BIG_ENDIAN
+#	define __LITTLE_ENDIAN LITTLE_ENDIAN
+#	define __PDP_ENDIAN    PDP_ENDIAN
+
+#else
+
+#	error Endian: platform not supported
+
+#endif
+
+/// Hardware --> Network (big-endian) byte order conversion
+/// @param size source length in four octets
+inline void HtoNLA(uint32_t* dst, const uint32_t* src, size_t size)
+{
+    for (size_t i = 0; i < size; ++ i)
+        dst[i] = htobe32(src[i]);
+}
+
+/// Network (big-endian) --> Hardware byte order conversion
+/// @param size source length in four octets
+inline void NtoHLA(uint32_t* dst, const uint32_t* src, size_t size)
+{
+    for (size_t i = 0; i < size; ++ i)
+        dst[i] = be32toh(src[i]);
+}
+
+// Hardware <--> Intel (little endian) convention
+inline void HtoILA(uint32_t* dst, const uint32_t* src, size_t size)
+{
+    for (size_t i = 0; i < size; ++ i)
+        dst[i] = htole32(src[i]);
+}
+
+inline void ItoHLA(uint32_t* dst, const uint32_t* src, size_t size)
+{
+    for (size_t i = 0; i < size; ++ i)
+        dst[i] = le32toh(src[i]);
+}
+
 // Bit numbering utility.
-// Usage: Bits<leftmost, rightmost>
 //
-// You can use it as a typedef (say, "MASKTYPE") and then use the following members:
-// - MASKTYPE::mask - to get the int32_t value with bimask (used bits set to 1, others to 0)
+// This is something that allows you to turn 32-bit integers into bit fields.
+// Although bitfields are part of C++ language, they are not designed to be
+// interchanged with 32-bit numbers, and any attempt to doing it (by placing
+// inside a union, for example) is nonportable (order of bitfields inside
+// same-covering 32-bit integer number is dependent on the endian), so they are
+// popularly disregarded as useless. Instead the 32-bit numbers with bits
+// individually selected is preferred, with usually manual playing around with
+// & and | operators, as well as << and >>. This tool is designed to simplify
+// the use of them. This can be used to qualify a range of bits inside a 32-bit
+// number to be a separate number, you can "wrap" it by placing the integer
+// value in the range of these bits, as well as "unwrap" (extract) it from
+// the given place. For your own safety, use one prefix to all constants that
+// concern bit ranges intended to be inside the same "bit container".
+//
+// Usage: typedef Bits<leftmost, rightmost> MASKTYPE;  // MASKTYPE is a name of your choice.
+//
+// With this defined, you can use the following members:
+// - MASKTYPE::mask - to get the int32_t value with bitmask (used bits set to 1, others to 0)
 // - MASKTYPE::offset - to get the lowermost bit number, or number of bits to shift
 // - MASKTYPE::wrap(int value) - to create a bitset where given value is encoded in given bits
 // - MASKTYPE::unwrap(int bitset) - to extract an integer value from the bitset basing on mask definition
@@ -79,7 +305,7 @@ template<size_t R>
 struct BitsetMask<R, R, true>
 {
     static const bool correct = true;
-    static const uint32_t value = 1 << R;
+    static const uint32_t value = 1u << R;
 };
 
 // This is a trap for a case that BitsetMask::correct in the master template definition
@@ -94,8 +320,8 @@ struct BitsetMask<L, R, false>
 template <size_t L, size_t R = L>
 struct Bits
 {
-    // DID YOU GET kind-of error: ‘mask’ is not a member of ‘Bits<3u, 5u, false>’ ?
-    // See the the above declaration of 'correct' !
+    // DID YOU GET a kind-of error: 'mask' is not a member of 'Bits<3u, 5u, false>'?
+    // See the the above declaration of 'correct'!
     static const uint32_t mask = BitsetMask<L, R>::value;
     static const uint32_t offset = R;
     static const size_t size = L - R + 1;
@@ -112,19 +338,48 @@ struct Bits
 
     /// Extracts appropriate bit range and returns them as normal integer value.
     static uint32_t unwrap(uint32_t bitset) { return (bitset & mask) >> offset; }
+
+    template<class T>
+    static T unwrapt(uint32_t bitset) { return static_cast<T>(unwrap(bitset)); }
 };
 
 
-template <typename FieldType, size_t Size, typename IndexerType>
+//inline int32_t Bit(size_t b) { return 1 << b; }
+// XXX This would work only with 'constexpr', but this is
+// available only in C++11. In C++03 this can be only done
+// using a macro.
+//
+// Actually this can be expressed in C++11 using a better technique,
+// such as user-defined literals:
+// 2_bit  --> 1 >> 2
+
+#ifdef BIT
+#undef BIT
+#endif
+#define BIT(x) (1 << (x))
+
+
+// ------------------------------------------------------------
+// This is something that reminds a structure consisting of fields
+// of the same type, implemented as an array. It's parametrized
+// by the type of fields and the type, which's values should be
+// used for indexing (preferably an enum type). Whatever type is
+// used for indexing, it is converted to size_t for indexing the
+// actual array.
+// 
+// The user should use it as an array: ds[DS_NAME], stating
+// that DS_NAME is of enum type passed as 3rd parameter.
+// However trying to do ds[0] would cause a compile error.
+template <typename FieldType, size_t NoOfFields, typename IndexerType>
 struct DynamicStruct
 {
-    FieldType inarray[Size];
+    FieldType inarray[NoOfFields];
 
     void clear()
     {
         // As a standard library, it can be believed that this call
         // can be optimized when FieldType is some integer.
-        std::fill(inarray, inarray + Size, FieldType());
+        std::fill(inarray, inarray + NoOfFields, FieldType());
     }
 
     FieldType operator[](IndexerType ix) const { return inarray[size_t(ix)]; }
@@ -159,6 +414,88 @@ struct DynamicStruct
 };
 
 
+/// Fixed-size array template class.
+namespace srt {
+
+template <class T>
+class FixedArray
+{
+public:
+    FixedArray(size_t size)
+        : m_size(size)
+        , m_entries(new T[size])
+    {
+    }
+
+    ~FixedArray()
+    {
+        delete [] m_entries;
+    }
+
+public:
+    const T& operator[](size_t index) const
+    {
+        if (index >= m_size)
+            throw_invalid_index(index);
+
+        return m_entries[index];
+    }
+
+    T& operator[](size_t index)
+    {
+        if (index >= m_size)
+            throw_invalid_index(index);
+
+        return m_entries[index];
+    }
+
+    const T& operator[](int index) const
+    {
+        if (index < 0 || static_cast<size_t>(index) >= m_size)
+            throw_invalid_index(index);
+
+        return m_entries[index];
+    }
+
+    T& operator[](int index)
+    {
+        if (index < 0 || static_cast<size_t>(index) >= m_size)
+            throw_invalid_index(index);
+
+        return m_entries[index];
+    }
+
+    size_t size() const { return m_size; }
+
+    typedef T* iterator;
+    typedef const T* const_iterator;
+
+    iterator begin() { return m_entries; }
+    iterator end() { return m_entries + m_size; }
+
+    const_iterator cbegin() const { return m_entries; }
+    const_iterator cend() const { return m_entries + m_size; }
+
+    T* data() { return m_entries; }
+
+private:
+    FixedArray(const FixedArray<T>& );
+    FixedArray<T>& operator=(const FixedArray<T>&);
+
+    void throw_invalid_index(int i) const
+    {
+        std::stringstream ss;
+        ss << "Index " << i << "out of range";
+        throw std::runtime_error(ss.str());
+    }
+
+private:
+    size_t      m_size;
+    T* const    m_entries;
+};
+
+} // namespace srt
+
 // ------------------------------------------------------------
 
 
@@ -168,20 +505,71 @@ inline bool IsSet(int32_t bitset, int32_t flagset)
     return (bitset & flagset) == flagset;
 }
 
-#if HAVE_CXX11
-
-// Replacement for a bare reference for passing a variable to be filled by a function call.
-// To pass a variable, just use the std::ref(variable). The call will be accepted if you
-// pass the result of ref(), but will be rejected if you just pass a variable.
-template <class T>
-struct ref_t: public std::reference_wrapper<T>
+// std::addressof in C++11,
+// needs to be provided for C++03
+template <class RefType>
+inline RefType* AddressOf(RefType& r)
 {
-    typedef std::reference_wrapper<T> base;
-    ref_t() {}
-    ref_t(const ref_t& i): base(i) {}
-    ref_t(const base& i): base(i) {}
+    return (RefType*)(&(unsigned char&)(r));
+}
+
+template <class T>
+struct explicit_t
+{
+    T inobject;
+    explicit_t(const T& uo): inobject(uo) {}
+
+    operator T() const { return inobject; }
+
+private:
+    template <class X>
+    explicit_t(const X& another);
 };
 
+// This is required for Printable function if you have a container of pairs,
+// but this function has a different definition for C++11 and C++03.
+namespace srt_pair_op
+{
+    template <class Value1, class Value2>
+    std::ostream& operator<<(std::ostream& s, const std::pair<Value1, Value2>& v)
+    {
+        s << "{" << v.first << " " << v.second << "}";
+        return s;
+    }
+}
+
+namespace any_op
+{
+    template <class T>
+    struct AnyProxy
+    {
+        const T& value;
+        bool result;
+
+        AnyProxy(const T& x, bool res): value(x), result(res) {}
+
+        AnyProxy<T>& operator,(const T& val)
+        {
+            if (result)
+                return *this;
+            result = value == val;
+            return *this;
+        }
+
+        operator bool() { return result; }
+    };
+
+    template <class T> inline
+    AnyProxy<T> EqualAny(const T& checked_val)
+    {
+        return AnyProxy<T>(checked_val, false);
+    }
+}
+
+#if HAVE_CXX11
+
+template <class In>
+inline auto Move(In& i) -> decltype(std::move(i)) { return std::move(i); }
 
 // Gluing string of any type, wrapper for operator <<
 
@@ -191,7 +579,7 @@ inline Stream& Print(Stream& in) { return in;}
 template <class Stream, class Arg1, class... Args>
 inline Stream& Print(Stream& sout, Arg1&& arg1, Args&&... args)
 {
-    sout << arg1;
+    sout << std::forward<Arg1>(arg1);
     return Print(sout, args...);
 }
 
@@ -203,358 +591,428 @@ inline std::string Sprint(Args&&... args)
     return sout.str();
 }
 
+// We need to use UniquePtr, in the form of C++03 it will be a #define.
+// Naturally will be used std::move() so that it can later painlessly
+// switch to C++11.
+template <class T>
+using UniquePtr = std::unique_ptr<T>;
+
+template <class Container, class Value = typename Container::value_type, typename... Args> inline
+std::string Printable(const Container& in, Value /*pseudoargument*/, Args&&... args)
+{
+    using namespace srt_pair_op;
+    std::ostringstream os;
+    Print(os, args...);
+    os << "[ ";
+    for (auto i: in)
+        os << Value(i) << " ";
+    os << "]";
+    return os.str();
+}
+
+template <class Container> inline
+std::string Printable(const Container& in)
+{
+    using namespace srt_pair_op;
+    using Value = typename Container::value_type;
+    return Printable(in, Value());
+}
+
+template<typename Map, typename Key>
+auto map_get(Map& m, const Key& key, typename Map::mapped_type def = typename Map::mapped_type()) -> typename Map::mapped_type
+{
+    auto it = m.find(key);
+    return it == m.end() ? def : it->second;
+}
+
+template<typename Map, typename Key>
+auto map_getp(Map& m, const Key& key) -> typename Map::mapped_type*
+{
+    auto it = m.find(key);
+    return it == m.end() ? nullptr : std::addressof(it->second);
+}
+
+template<typename Map, typename Key>
+auto map_getp(const Map& m, const Key& key) -> typename Map::mapped_type const*
+{
+    auto it = m.find(key);
+    return it == m.end() ? nullptr : std::addressof(it->second);
+}
+
+
+#else
+
+// The unique_ptr requires C++11, and the rvalue-reference feature,
+// so here we're simulate the behavior using the old std::auto_ptr.
+
+// This is only to make a "move" call transparent and look ok towards
+// the C++11 code.
+template <class T>
+std::auto_ptr_ref<T> Move(const std::auto_ptr_ref<T>& in) { return in; }
+
+// We need to provide also some fixes for this type that were not present in auto_ptr,
+// but they are present in unique_ptr.
+
+// C++03 doesn't have a templated typedef, but still we need some things
+// that can only function as a class.
+template <class T>
+class UniquePtr: public std::auto_ptr<T>
+{
+    typedef std::auto_ptr<T> Base;
+
+public:
+
+    // This is a template - so method names must be declared explicitly
+    typedef typename Base::element_type element_type;
+    using Base::get;
+    using Base::reset;
+
+    // All constructor declarations must be repeated.
+    // "Constructor delegation" is also only C++11 feature.
+    explicit UniquePtr(element_type* p = 0) throw() : Base(p) {}
+    UniquePtr(UniquePtr& a) throw() : Base(a) { }
+    template<typename Type1>
+    UniquePtr(UniquePtr<Type1>& a) throw() : Base(a) {}
+
+    UniquePtr& operator=(UniquePtr& a) throw() { return Base::operator=(a); }
+    template<typename Type1>
+    UniquePtr& operator=(UniquePtr<Type1>& a) throw() { return Base::operator=(a); }
+
+    // Good, now we need to add some parts of the API of unique_ptr.
+
+    bool operator==(const UniquePtr& two) const { return get() == two.get(); }
+    bool operator!=(const UniquePtr& two) const { return get() != two.get(); }
+
+    bool operator==(const element_type* two) const { return get() == two; }
+    bool operator!=(const element_type* two) const { return get() != two; }
+
+    operator bool () const { return 0!= get(); }
+};
+
+// A primitive one-argument versions of Sprint and Printable
+template <class Arg1>
+inline std::string Sprint(const Arg1& arg)
+{
+    std::ostringstream sout;
+    sout << arg;
+    return sout.str();
+}
+
+// Ok, let it be 2-arg, in case when a manipulator is needed
+template <class Arg1, class Arg2>
+inline std::string Sprint(const Arg1& arg1, const Arg2& arg2)
+{
+    std::ostringstream sout;
+    sout << arg1 << arg2;
+    return sout.str();
+}
+
+template <class Container> inline
+std::string Printable(const Container& in)
+{
+    using namespace srt_pair_op;
+    typedef typename Container::value_type Value;
+    std::ostringstream os;
+    os << "[ ";
+    for (typename Container::const_iterator i = in.begin(); i != in.end(); ++i)
+        os << Value(*i) << " ";
+    os << "]";
+
+    return os.str();
+}
+
+template<typename Map, typename Key>
+typename Map::mapped_type map_get(Map& m, const Key& key, typename Map::mapped_type def = typename Map::mapped_type())
+{
+    typename Map::iterator it = m.find(key);
+    return it == m.end() ? def : it->second;
+}
+
+template<typename Map, typename Key>
+typename Map::mapped_type map_get(const Map& m, const Key& key, typename Map::mapped_type def = typename Map::mapped_type())
+{
+    typename Map::const_iterator it = m.find(key);
+    return it == m.end() ? def : it->second;
+}
+
+template<typename Map, typename Key>
+typename Map::mapped_type* map_getp(Map& m, const Key& key)
+{
+    typename Map::iterator it = m.find(key);
+    return it == m.end() ? (typename Map::mapped_type*)0 : &(it->second);
+}
+
+template<typename Map, typename Key>
+typename Map::mapped_type const* map_getp(const Map& m, const Key& key)
+{
+    typename Map::const_iterator it = m.find(key);
+    return it == m.end() ? (typename Map::mapped_type*)0 : &(it->second);
+}
+
 #endif
 
-
-////////////////////////////////////////////////////////////////////////////////
-
-class CTimer
+// Printable with prefix added for every element.
+// Useful when printing a container of sockets or sequence numbers.
+template <class Container> inline
+std::string PrintableMod(const Container& in, const std::string& prefix)
 {
-public:
-   CTimer();
-   ~CTimer();
+    using namespace srt_pair_op;
+    typedef typename Container::value_type Value;
+    std::ostringstream os;
+    os << "[ ";
+    for (typename Container::const_iterator y = in.begin(); y != in.end(); ++y)
+        os << prefix << Value(*y) << " ";
+    os << "]";
+    return os.str();
+}
 
-public:
-
-      /// Sleep for "interval" CCs.
-      /// @param interval [in] CCs to sleep.
-
-   void sleep(uint64_t interval);
-
-      /// Seelp until CC "nexttime".
-      /// @param nexttime [in] next time the caller is waken up.
-
-   void sleepto(uint64_t nexttime);
-
-      /// Stop the sleep() or sleepto() methods.
-
-   void interrupt();
-
-      /// trigger the clock for a tick, for better granuality in no_busy_waiting timer.
-
-   void tick();
-
-public:
-
-      /// Read the CPU clock cycle into x.
-      /// @param x [out] to record cpu clock cycles.
-
-   static void rdtsc(uint64_t &x);
-
-      /// return the CPU frequency.
-      /// @return CPU frequency.
-
-   static uint64_t getCPUFrequency();
-
-      /// check the current time, 64bit, in microseconds.
-      /// @return current time in microseconds.
-
-   static uint64_t getTime();
-
-      /// trigger an event such as new connection, close, new data, etc. for "select" call.
-
-   static void triggerEvent();
-
-      /// wait for an event to br triggered by "triggerEvent".
-
-   static void waitForEvent();
-
-      /// sleep for a short interval. exact sleep time does not matter
-
-   static void sleep();
-
-private:
-   uint64_t getTimeInMicroSec();
-
-private:
-   uint64_t m_ullSchedTime;             // next schedulled time
-
-   pthread_cond_t m_TickCond;
-   pthread_mutex_t m_TickLock;
-
-   static pthread_cond_t m_EventCond;
-   static pthread_mutex_t m_EventLock;
-
-private:
-   static uint64_t s_ullCPUFrequency;	// CPU frequency : clock cycles per microsecond
-   static uint64_t readCPUFrequency();
-   static bool m_bUseMicroSecond;       // No higher resolution timer available, use gettimeofday().
-};
-
-////////////////////////////////////////////////////////////////////////////////
-
-class CGuard
+template<typename InputIterator, typename OutputIterator, typename TransFunction>
+inline void FilterIf(InputIterator bg, InputIterator nd,
+        OutputIterator out, TransFunction fn)
 {
-public:
-   CGuard(pthread_mutex_t& lock);
-   ~CGuard();
+    for (InputIterator i = bg; i != nd; ++i)
+    {
+        std::pair<typename TransFunction::result_type, bool> result = fn(*i);
+        if (!result.second)
+            continue;
+        *out++ = result.first;
+    }
+}
 
-public:
-   static int enterCS(pthread_mutex_t& lock);
-   static int leaveCS(pthread_mutex_t& lock);
-
-   static void createMutex(pthread_mutex_t& lock);
-   static void releaseMutex(pthread_mutex_t& lock);
-
-   static void createCond(pthread_cond_t& cond);
-   static void releaseCond(pthread_cond_t& cond);
-
-private:
-   pthread_mutex_t& m_Mutex;            // Alias name of the mutex to be protected
-   int m_iLocked;                       // Locking status
-
-   CGuard& operator=(const CGuard&);
-};
-
-class InvertedGuard
+template <class Value, class ArgValue>
+inline void insert_uniq(std::vector<Value>& v, const ArgValue& val)
 {
-    pthread_mutex_t* m_pMutex;
-public:
+    typename std::vector<Value>::iterator i = std::find(v.begin(), v.end(), val);
+    if (i != v.end())
+        return;
 
-    InvertedGuard(pthread_mutex_t* smutex): m_pMutex(smutex)
-    {
-        if ( !smutex )
-            return;
+    v.push_back(val);
+}
 
-        CGuard::leaveCS(*smutex);
-    }
+// This can be used in conjunction with Tie to simplify the code
+// in loops around a whole container:
+// list<string>::const_iterator it, end;
+// Tie(it, end) = All(list_container);
+template<class Container>
+std::pair<typename Container::iterator, typename Container::iterator>
+inline All(Container& c) { return std::make_pair(c.begin(), c.end()); }
 
-    ~InvertedGuard()
-    {
-        if ( !m_pMutex )
-            return;
+template<class Container>
+std::pair<typename Container::const_iterator, typename Container::const_iterator>
+inline All(const Container& c) { return std::make_pair(c.begin(), c.end()); }
 
-        CGuard::enterCS(*m_pMutex);
-    }
-};
 
-////////////////////////////////////////////////////////////////////////////////
-
-// UDT Sequence Number 0 - (2^31 - 1)
-
-// seqcmp: compare two seq#, considering the wraping
-// seqlen: length from the 1st to the 2nd seq#, including both
-// seqoff: offset from the 2nd to the 1st seq#
-// incseq: increase the seq# by 1
-// decseq: decrease the seq# by 1
-// incseq: increase the seq# by a given offset
-
-class CSeqNo
+template <class Container, class Value>
+inline void FringeValues(const Container& from, std::map<Value, size_t>& out)
 {
-public:
-   inline static int seqcmp(int32_t seq1, int32_t seq2)
-   {return (abs(seq1 - seq2) < m_iSeqNoTH) ? (seq1 - seq2) : (seq2 - seq1);}
+    for (typename Container::const_iterator i = from.begin(); i != from.end(); ++i)
+        ++out[*i];
+}
 
-   inline static int seqlen(int32_t seq1, int32_t seq2)
-   {return (seq1 <= seq2) ? (seq2 - seq1 + 1) : (seq2 - seq1 + m_iMaxSeqNo + 2);}
-
-   inline static int seqoff(int32_t seq1, int32_t seq2)
-   {
-      if (abs(seq1 - seq2) < m_iSeqNoTH)
-         return seq2 - seq1;
-
-      if (seq1 < seq2)
-         return seq2 - seq1 - m_iMaxSeqNo - 1;
-
-      return seq2 - seq1 + m_iMaxSeqNo + 1;
-   }
-
-   inline static int32_t incseq(int32_t seq)
-   {return (seq == m_iMaxSeqNo) ? 0 : seq + 1;}
-
-   inline static int32_t decseq(int32_t seq)
-   {return (seq == 0) ? m_iMaxSeqNo : seq - 1;}
-
-   inline static int32_t incseq(int32_t seq, int32_t inc)
-   {return (m_iMaxSeqNo - seq >= inc) ? seq + inc : seq - m_iMaxSeqNo + inc - 1;}
-   // m_iMaxSeqNo >= inc + sec  --- inc + sec <= m_iMaxSeqNo
-   // if inc + sec > m_iMaxSeqNo then return seq + inc - (m_iMaxSeqNo+1)
-
-   inline static int32_t decseq(int32_t seq, int32_t dec)
-   {
-       // Check if seq - dec < 0, but before it would have happened
-       if ( seq < dec )
-       {
-           int32_t left = dec - seq; // This is so many that is left after dragging dec to 0
-           // So now decrement the (m_iMaxSeqNo+1) by "left"
-           return m_iMaxSeqNo - left + 1;
-       }
-       return seq - dec;
-   }
-
-public:
-   static const int32_t m_iSeqNoTH;             // threshold for comparing seq. no.
-   static const int32_t m_iMaxSeqNo;            // maximum sequence number used in UDT
-};
-
-////////////////////////////////////////////////////////////////////////////////
-
-// UDT ACK Sub-sequence Number: 0 - (2^31 - 1)
-
-class CAckNo
+template <class Signature>
+struct CallbackHolder
 {
-public:
-   inline static int32_t incack(int32_t ackno)
-   {return (ackno == m_iMaxAckSeqNo) ? 0 : ackno + 1;}
+    void* opaque;
+    Signature* fn;
 
-public:
-   static const int32_t m_iMaxAckSeqNo;         // maximum ACK sub-sequence number used in UDT
-};
+    CallbackHolder(): opaque(NULL), fn(NULL)  {}
 
-
-
-////////////////////////////////////////////////////////////////////////////////
-
-struct CIPAddress
-{
-   static bool ipcmp(const struct sockaddr* addr1, const struct sockaddr* addr2, int ver = AF_INET);
-   static void ntop(const struct sockaddr* addr, uint32_t ip[4], int ver = AF_INET);
-   static void pton(struct sockaddr* addr, const uint32_t ip[4], int ver = AF_INET);
-   static std::string show(const struct sockaddr* adr);
-};
-
-////////////////////////////////////////////////////////////////////////////////
-
-struct CMD5
-{
-   static void compute(const char* input, unsigned char result[16]);
-};
-
-// Debug stats
-template <size_t SIZE>
-class StatsLossRecords
-{
-    int32_t initseq;
-    std::bitset<SIZE> array;
-
-public:
-
-    StatsLossRecords(): initseq(-1) {}
-
-    // To check if this structure still keeps record of that sequence.
-    // This is to check if the information about this not being found
-    // is still reliable.
-    bool exists(int32_t seq)
+    void set(void* o, Signature* f)
     {
-        return initseq != -1 && CSeqNo::seqcmp(seq, initseq) >= 0;
-    }
-
-    int32_t base() { return initseq; }
-
-    void clear()
-    {
-        initseq = -1;
-        array.reset();
-    }
-
-    void add(int32_t lo, int32_t hi)
-    {
-        int32_t end = lo + CSeqNo::seqcmp(hi, lo);
-        for (int32_t i = lo; i != end; i = CSeqNo::incseq(i))
-            add(i);
-    }
-
-    void add(int32_t seq)
-    {
-        if ( array.none() )
-        {
-            // May happen it wasn't initialized. Set it as initial loss sequence.
-            initseq = seq;
-            array[0] = true;
-            return;
-        }
-
-        // Calculate the distance between this seq and the oldest one.
-        int seqdiff = CSeqNo::seqcmp(seq, initseq);
-        if ( seqdiff > int(SIZE) )
-        {
-            // Size exceeded. Drop the oldest sequences.
-            // First calculate how many must be removed.
-            size_t toremove = seqdiff - SIZE;
-            // Now, since that position, find the nearest 1
-            while ( !array[toremove] && toremove <= SIZE )
-                ++toremove;
-
-            // All have to be dropped, so simply reset the array
-            if ( toremove == SIZE )
-            {
-                initseq = seq;
-                array[0] = true;
-                return;
-            }
-
-            // Now do the shift of the first found 1 to position 0
-            // and its index add to initseq
-            initseq += toremove;
-            seqdiff -= toremove;
-            array >>= toremove;
-        }
-
-        // Now set appropriate bit that represents this seq
-        array[seqdiff] = true;
-    }
-
-    StatsLossRecords& operator << (int32_t seq)
-    {
-        add(seq);
-        return *this;
-    }
-
-    void remove(int32_t seq)
-    {
-        // Check if is in range. If not, ignore.
-        int seqdiff = CSeqNo::seqcmp(seq, initseq);
-        if ( seqdiff < 0 )
-            return; // already out of array
-        if ( seqdiff > SIZE )
-            return; // never was added!
-
-        array[seqdiff] = true;
-    }
-
-    bool find(int32_t seq) const
-    {
-        int seqdiff = CSeqNo::seqcmp(seq, initseq);
-        if ( seqdiff < 0 )
-            return false; // already out of array
-        if ( size_t(seqdiff) > SIZE )
-            return false; // never was added!
-
-        return array[seqdiff];
-    }
-
+        // Test if the pointer is a pointer to function. Don't let
+        // other type of pointers here.
 #if HAVE_CXX11
-
-    std::string to_string() const
-    {
-        std::string out;
-        for (size_t i = 0; i < SIZE; ++i)
-        {
-            if ( array[i] )
-                out += std::to_string(initseq+i) + " ";
-        }
-
-        return out;
-    }
+        // NOTE: No poor-man's replacement can be done for C++03 because it's
+        // not possible to fake calling a function without calling it and no
+        // other operation can be done without extensive transformations on
+        // the Signature type, still in C++03 possible only on functions up to
+        // 2 arguments (callbacks in SRT usually have more).
+        static_assert(std::is_function<Signature>::value, "CallbackHolder is for functions only!");
 #endif
+
+        opaque = o;
+        fn = f;
+    }
+
+    operator bool() { return fn != NULL; }
 };
 
+#define CALLBACK_CALL(holder,...) (*holder.fn)(holder.opaque, __VA_ARGS__)
+// The version of std::tie from C++11, but for pairs only.
+template <class T1, class T2>
+struct PairProxy
+{
+    T1& v1;
+    T2& v2;
 
+    PairProxy(T1& c1, T2& c2): v1(c1), v2(c2) {}
+
+    void operator=(const std::pair<T1, T2>& p)
+    {
+        v1 = p.first;
+        v2 = p.second;
+    }
+};
+
+template <class T1, class T2> inline
+PairProxy<T1, T2> Tie2(T1& v1, T2& v2)
+{
+    return PairProxy<T1, T2>(v1, v2);
+}
+
+template<class T>
+struct PassFilter
+{
+    T lower, median, upper;
+
+    bool encloses(const T& value)
+    {
+        // Throw away those that don't fit in the filter
+        return value > lower && value < upper;
+    }
+};
+
+// This utility is used in window.cpp where it is required to calculate
+// the median value basing on the value in the very middle and filtered
+// out values exceeding its range of 1/8 and 8 times. Returned is a structure
+// that shows the median and also the lower and upper value used for filtering.
+inline PassFilter<int> GetPeakRange(const int* window, int* replica, size_t size)
+{
+    // This calculation does more-less the following:
+    //
+    // 1. Having example window:
+    //  - 50, 51, 100, 55, 80, 1000, 600, 1500, 1200, 10, 90
+    // 2. This window is now sorted, but we only know the value in the middle:
+    //  - 10, 50, 51, 55, 80, [[90]], 100, 600, 1000, 1200, 1500
+    // 3. Now calculate:
+    //   - lower: 90/8 = 11.25
+    //   - upper: 90*8 = 720
+    // 4. Now calculate the arithmetic median from all these values,
+    //    but drop those from outside the <lower, upper> range:
+    //  - 10, (11<) [ 50, 51, 55, 80, 90, 100, 600, ] (>720) 1000, 1200, 1500
+    // 5. Calculate the median from the extracted range,
+    //    NOTE: the median is actually repeated once, so size is +1.
+    //
+    //    values = { 50, 51, 55, 80, 90, 100, 600 };
+    //    sum = 90 + accumulate(values); ==> 1026
+    //    median = sum/(1 + values.size()); ==> 147
+    //
+    // For comparison: the overall arithmetic median from this window == 430
+    //
+    // 6. Returned value = 1M/median
+
+    // get median value, but cannot change the original value order in the window
+    std::copy(window, window + size, replica);
+    std::nth_element(replica, replica + (size / 2), replica + size);
+    //std::sort(replica, replica + psize); <--- was used for debug, just leave it as a mark
+
+    PassFilter<int> filter;
+    filter.median = replica[size / 2];
+    filter.upper = filter.median << 3; // median*8
+    filter.lower = filter.median >> 3; // median/8
+
+    return filter;
+}
+
+// This function sums up all values in the array (from p to end),
+// except those that don't fit in the low- and high-pass filter.
+// Returned is the sum and the number of elements taken into account.
+inline std::pair<int, int> AccumulatePassFilter(const int* p, size_t size, PassFilter<int> filter)
+{
+    int count = 0;
+    int sum = 0;
+    const int* const end = p + size;
+    for (; p != end; ++p)
+    {
+        // Throw away those that don't fit in the filter
+        if (!filter.encloses(*p))
+            continue;
+
+        sum += *p;
+        ++count;
+    }
+
+    return std::make_pair(sum, count);
+}
+
+// This function sums up all values in the array (from p to end)
+// and simultaneously elements from `para`, stated it points to
+// an array of the same size. The first array is used as a driver
+// for which elements to include and which to skip, and this is done
+// for both arrays at particular index position. Returner is the sum
+// of the elements passed from the first array and from the `para`
+// array, as well as the number of included elements.
+template <class IntCount, class IntParaCount>
+inline void AccumulatePassFilterParallel(const int* p, size_t size, PassFilter<int> filter,
+        const int* para,
+        int& w_sum, IntCount& w_count, IntParaCount& w_paracount)
+{
+    IntCount count = 0;
+    int sum = 0;
+    IntParaCount parasum = 0;
+    const int* const end = p + size;
+    for (; p != end; ++p, ++para)
+    {
+        // Throw away those that don't fit in the filter
+        if (!filter.encloses(*p))
+            continue;
+
+        sum += *p;
+        parasum += *para;
+        ++count;
+    }
+    w_count = count;
+    w_sum = sum;
+    w_paracount = parasum;
+}
+
+template<class Type>
+inline Type Bounds(Type lower, Type value, Type upper)
+{
+    if (value < lower)
+        return lower;
+    if (value > upper)
+        return upper;
+    return value;
+}
+
+
+inline std::string FormatBinaryString(const uint8_t* bytes, size_t size)
+{
+    if ( size == 0 )
+        return "";
+
+    using namespace std;
+
+    ostringstream os;
+    os << setfill('0') << setw(2) << hex << uppercase;
+
+    for (size_t i = 0; i < size; ++i)
+    {
+        os << int(bytes[i]);
+    }
+    return os.str();
+}
+
+
+/// This class is useful in every place where
+/// the time drift should be traced. It's currently in use in every
+/// solution that implements any kind of TSBPD.
 template<unsigned MAX_SPAN, int MAX_DRIFT, bool CLEAR_ON_UPDATE = true>
 class DriftTracer
 {
-    int64_t m_qDrift;
-    int64_t m_qOverdrift;
+    int64_t  m_qDrift;
+    int64_t  m_qOverdrift;
 
-    int64_t m_qDriftSum;
+    int64_t  m_qDriftSum;
     unsigned m_uDriftSpan;
 
 public:
     DriftTracer()
-        : m_qDrift(),
-        m_qOverdrift(),
-        m_qDriftSum(),
-        m_uDriftSpan()
+        : m_qDrift(0)
+        , m_qOverdrift(0)
+        , m_qDriftSum(0)
+        , m_uDriftSpan(0)
     {}
 
     bool update(int64_t driftval)
@@ -562,37 +1020,44 @@ public:
         m_qDriftSum += driftval;
         ++m_uDriftSpan;
 
-        if ( m_uDriftSpan >= MAX_SPAN )
+        // I moved it here to calculate accumulated overdrift.
+        if (CLEAR_ON_UPDATE)
+            m_qOverdrift = 0;
+
+        if (m_uDriftSpan < MAX_SPAN)
+            return false;
+
+
+        // Calculate the median of all drift values.
+        // In most cases, the divisor should be == MAX_SPAN.
+        m_qDrift = m_qDriftSum / m_uDriftSpan;
+
+        // And clear the collection
+        m_qDriftSum = 0;
+        m_uDriftSpan = 0;
+
+        // In case of "overdrift", save the overdriven value in 'm_qOverdrift'.
+        // In clear mode, you should add this value to the time base when update()
+        // returns true. The drift value will be since now measured with the
+        // overdrift assumed to be added to the base.
+        if (std::abs(m_qDrift) > MAX_DRIFT)
         {
-            if ( CLEAR_ON_UPDATE )
-                m_qOverdrift = 0;
-
-            // Calculate the median of all drift values.
-            // In most cases, the divisor should be == MAX_SPAN.
-            m_qDrift = m_qDriftSum / m_uDriftSpan;
-
-            // And clear the collection
-            m_qDriftSum = 0;
-            m_uDriftSpan = 0;
-
-            // In case of "overdrift", save the overdriven value in 'm_qOverdrift'.
-            // In clear mode, you should add this value to the time base when update()
-            // returns true. The drift value will be since now measured with the
-            // overdrift assumed to be added to the base.
-            if (std::abs(m_qDrift) > MAX_DRIFT)
-            {
-                m_qOverdrift = m_qDrift < 0 ? -MAX_DRIFT : MAX_DRIFT;
-                m_qDrift -= m_qOverdrift;
-            }
-
-            // printDriftOffset(m_qOverdrift, m_qDrift);
-
-            // Timebase is separate
-            // m_qTimeBase += m_qOverdrift;
-
-            return true;
+            m_qOverdrift = m_qDrift < 0 ? -MAX_DRIFT : MAX_DRIFT;
+            m_qDrift -= m_qOverdrift;
         }
-        return false;
+
+        // printDriftOffset(m_qOverdrift, m_qDrift);
+
+        // Timebase is separate
+        // m_qTimeBase += m_qOverdrift;
+
+        return true;
+    }
+
+    // For group overrides
+    void forceDrift(int64_t driftval)
+    {
+        m_qDrift = driftval;
     }
 
     // These values can be read at any time, however if you want
@@ -601,13 +1066,13 @@ public:
     //
     // IMPORTANT: drift() can be called at any time, just remember
     // that this value may look different than before only if the
-    // last update() return true, which need not be important for you.
+    // last update() returned true, which need not be important for you.
     //
     // CASE: CLEAR_ON_UPDATE = true
     // overdrift() should be read only immediately after update() returned
     // true. It will stay available with this value until the next time when
     // update() returns true, in which case the value will be cleared.
-    // Therefore, after calling update() if it retuns true, you should read
+    // Therefore, after calling update() if it returns true, you should read
     // overdrift() immediately an make some use of it. Next valid overdrift
     // will be then relative to every previous overdrift.
     //
@@ -616,9 +1081,198 @@ public:
     // any changes in overdrift. By manipulating the MAX_DRIFT parameter
     // you can decide how high the drift can go relatively to stay below
     // overdrift.
-    int64_t drift() { return m_qDrift; }
-    int64_t overdrift() { return m_qOverdrift; }
+    int64_t drift() const { return m_qDrift; }
+    int64_t overdrift() const { return m_qOverdrift; }
 };
 
+template <class KeyType, class ValueType>
+struct MapProxy
+{
+    std::map<KeyType, ValueType>& mp;
+    const KeyType& key;
+
+    MapProxy(std::map<KeyType, ValueType>& m, const KeyType& k): mp(m), key(k) {}
+
+    void operator=(const ValueType& val)
+    {
+        mp[key] = val;
+    }
+
+    typename std::map<KeyType, ValueType>::iterator find()
+    {
+        return mp.find(key);
+    }
+
+    typename std::map<KeyType, ValueType>::const_iterator find() const
+    {
+        return mp.find(key);
+    }
+
+    operator ValueType() const
+    {
+        typename std::map<KeyType, ValueType>::const_iterator p = find();
+        if (p == mp.end())
+            return ValueType();
+        return p->second;
+    }
+
+    ValueType deflt(const ValueType& defval) const
+    {
+        typename std::map<KeyType, ValueType>::const_iterator p = find();
+        if (p == mp.end())
+            return defval;
+        return p->second;
+    }
+
+    bool exists() const
+    {
+        return find() != mp.end();
+    }
+};
+
+/// Print some hash-based stamp of the first 16 bytes in the buffer
+inline std::string BufferStamp(const char* mem, size_t size)
+{
+    using namespace std;
+    char spread[16];
+
+    if (size < 16)
+        memset((spread + size), 0, 16 - size);
+    memcpy((spread), mem, min(size_t(16), size));
+
+    // Now prepare 4 cells for uint32_t.
+    union
+    {
+        uint32_t sum;
+        char cells[4];
+    };
+    memset((cells), 0, 4);
+
+    for (size_t x = 0; x < 4; ++x)
+        for (size_t y = 0; y < 4; ++y)
+        {
+            cells[x] += spread[x+4*y];
+        }
+
+    // Convert to hex string
+    ostringstream os;
+    os << hex << uppercase << setfill('0') << setw(8) << sum;
+
+    return os.str();
+}
+
+template <class OutputIterator>
+inline void Split(const std::string & str, char delimiter, OutputIterator tokens)
+{
+    if ( str.empty() )
+        return; // May cause crash and won't extract anything anyway
+
+    std::size_t start;
+    std::size_t end = -1;
+
+    do
+    {
+        start = end + 1;
+        end = str.find(delimiter, start);
+        *tokens = str.substr(
+                start,
+                (end == std::string::npos) ? std::string::npos : end - start);
+        ++tokens;
+    } while (end != std::string::npos);
+}
+
+inline std::string SelectNot(const std::string& unwanted, const std::string& s1, const std::string& s2)
+{
+    if (s1 == unwanted)
+        return s2; // might be unwanted, too, but then, there's nothing you can do anyway
+    if (s2 == unwanted)
+        return s1;
+
+    // Both have wanted values, so now compare if they are same
+    if (s1 == s2)
+        return s1; // occasionally there's a winner
+
+    // Irresolvable situation.
+    return std::string();
+}
+
+inline std::string SelectDefault(const std::string& checked, const std::string& def)
+{
+    if (checked == "")
+        return def;
+    return checked;
+}
+
+template <class It>
+inline size_t safe_advance(It& it, size_t num, It end)
+{
+    while ( it != end && num )
+    {
+        --num;
+        ++it;
+    }
+
+    return num; // will be effectively 0, if reached the required point, or >0, if end was by that number earlier
+}
+
+// This is available only in C++17, don't know why not C++11 as it's pretty useful.
+template <class V, size_t N> inline
+ATR_CONSTEXPR size_t Size(const V (&)[N]) ATR_NOEXCEPT { return N; }
+
+template <size_t DEPRLEN, typename ValueType>
+inline ValueType avg_iir(ValueType old_value, ValueType new_value)
+{
+    return (old_value * (DEPRLEN - 1) + new_value) / DEPRLEN;
+}
+
+template <size_t DEPRLEN, typename ValueType>
+inline ValueType avg_iir_w(ValueType old_value, ValueType new_value, size_t new_val_weight)
+{
+    return (old_value * (DEPRLEN - new_val_weight) + new_value * new_val_weight) / DEPRLEN;
+}
+
+// Property accessor definitions
+//
+// "Property" is a special method that accesses given field.
+// This relies only on a convention, which is the following:
+//
+// V x = object.prop(); <-- get the property's value
+// object.set_prop(x); <-- set the property a value
+//
+// Properties might be also chained when setting:
+//
+// object.set_prop1(v1).set_prop2(v2).set_prop3(v3);
+//
+// Properties may be defined various even very complicated
+// ways, which is simply providing a method with body. In order
+// to define a property simplest possible way, that is, refer
+// directly to the field that keeps it, here are the following macros:
+//
+// Prefix: SRTU_PROPERTY_
+// Followed by:
+//  - access type: RO, WO, RW, RR, RRW
+//  - chain flag: optional _CHAIN
+// Where access type is:
+// - RO - read only. Defines reader accessor. The accessor method will be const.
+// - RR - read reference. The accessor isn't const to allow reference passthrough.
+// - WO - write only. Defines writer accessor.
+// - RW - combines RO and WO.
+// - RRW - combines RR and WO.
+//
+// The _CHAIN marker is optional for macros providing writable accessors
+// for properties. The difference is that while simple write accessors return
+// void, the chaining accessors return the reference to the object for which
+// the write accessor was called so that you can call the next accessor (or
+// any other method as well) for the result.
+
+#define SRTU_PROPERTY_RR(type, name, field) type name() { return field; }
+#define SRTU_PROPERTY_RO(type, name, field) type name() const { return field; }
+#define SRTU_PROPERTY_WO(type, name, field) void set_##name(type arg) { field = arg; }
+#define SRTU_PROPERTY_WO_ARG(type, name, expr) void set_##name(type arg) { expr; }
+#define SRTU_PROPERTY_WO_CHAIN(otype, type, name, field) otype& set_##name(type arg) { field = arg; return *this; }
+#define SRTU_PROPERTY_RW(type, name, field) SRTU_PROPERTY_RO(type, name, field); SRTU_PROPERTY_WO(type, name, field)
+#define SRTU_PROPERTY_RRW(type, name, field) SRTU_PROPERTY_RR(type, name, field); SRTU_PROPERTY_WO(type, name, field)
+#define SRTU_PROPERTY_RW_CHAIN(otype, type, name, field) SRTU_PROPERTY_RO(type, name, field); SRTU_PROPERTY_WO_CHAIN(otype, type, name, field)
+#define SRTU_PROPERTY_RRW_CHAIN(otype, type, name, field) SRTU_PROPERTY_RR(type, name, field); SRTU_PROPERTY_WO_CHAIN(otype, type, name, field)
 
 #endif
